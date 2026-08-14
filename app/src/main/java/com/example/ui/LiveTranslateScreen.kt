@@ -6,13 +6,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,17 +26,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material3.Divider
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -47,6 +54,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,24 +65,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.model.ConnectionState
 import com.example.ui.components.AdbGuideSheet
-import com.example.ui.components.LogConsoleSheet
 import com.example.ui.components.SettingsDialog
 import com.example.viewmodel.MainViewModel
-
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.platform.LocalView
 
 private fun formatTokens(n: Long): String {
     if (n < 0L) return "0"
@@ -90,18 +98,20 @@ fun LiveTranslateScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val view = LocalView.current
 
     val connectionState by viewModel.connectionState.collectAsState()
     val isRecording by viewModel.isRecording.collectAsState()
     val audioVolume by viewModel.audioVolume.collectAsState()
     val availableDevices by viewModel.availableDevices.collectAsState()
+    val selectedDevice by viewModel.selectedDevice.collectAsState()
 
     val serverUrl by viewModel.serverUrl.collectAsState()
+    val sourceLanguage by viewModel.sourceLanguage.collectAsState()
     val targetLanguage by viewModel.targetLanguage.collectAsState()
     val vadSilenceMs by viewModel.vadSilenceMs.collectAsState()
     val fontSize by viewModel.fontSize.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
+    val micGain by viewModel.micGain.collectAsState()
 
     DisposableEffect(keepScreenOn, isRecording) {
         val window = (context as? android.app.Activity)?.window
@@ -115,9 +125,10 @@ fun LiveTranslateScreen(
         }
     }
 
-    val liveOriginalText by viewModel.liveOriginalText.collectAsState()
-    val liveTranslatedText by viewModel.liveTranslatedText.collectAsState()
-    val logs by viewModel.logs.collectAsState()
+    val originalBase by viewModel.originalBase.collectAsState()
+    val originalLive by viewModel.originalLive.collectAsState()
+    val translatedBase by viewModel.translatedBase.collectAsState()
+    val translatedLive by viewModel.translatedLive.collectAsState()
     val tokenUsage by viewModel.tokenUsage.collectAsState()
 
     val showUsbSheet by viewModel.showUsbDiagnosticSheet.collectAsState()
@@ -141,16 +152,53 @@ fun LiveTranslateScreen(
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f,
-        targetValue = 1.2f,
+        targetValue = 1.25f,
         animationSpec = infiniteRepeatable(
             animation = tween(800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulseScale"
     )
-    
+
+    val cursorAlphaOrig by rememberInfiniteTransition(label = "cursor_orig")
+        .animateFloat(
+            initialValue = 0.2f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(500, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "cursorAlphaOrig"
+        )
+
+    val cursorAlphaTrans by rememberInfiniteTransition(label = "cursor_trans")
+        .animateFloat(
+            initialValue = 0.2f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(500, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "cursorAlphaTrans"
+        )
+
+    val scrollStateTop = rememberScrollState()
+    val scrollStateBottom = rememberScrollState()
+
+    LaunchedEffect(originalBase, originalLive) {
+        if (scrollStateTop.maxValue > 0) {
+            scrollStateTop.animateScrollTo(scrollStateTop.maxValue)
+        }
+    }
+
+    LaunchedEffect(translatedBase, translatedLive) {
+        if (scrollStateBottom.maxValue > 0) {
+            scrollStateBottom.animateScrollTo(scrollStateBottom.maxValue)
+        }
+    }
+
     var showLanguageDropdown by remember { mutableStateOf(false) }
-    val targetLanguages = listOf("English", "Chinese (Simplified)", "Spanish", "French", "Japanese", "Korean", "German")
+    val targetLanguages = listOf("Chinese (Simplified)", "English", "Spanish", "French", "Japanese", "Korean", "German")
 
     Scaffold(
         topBar = {
@@ -160,21 +208,31 @@ fun LiveTranslateScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Language Dropdown Lookalike
+                        // Title
+                        Text(
+                            text = "Gemini 实时同传",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFF8FAFC)
+                        )
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // Target Language Selector Dropdown
                         Box {
                             Surface(
-                                color = Color.Transparent,
-                                shape = RoundedCornerShape(6.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                color = Color(0xFF1E293B).copy(alpha = 0.8f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155)),
                                 modifier = Modifier.clickable { showLanguageDropdown = true }
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                 ) {
-                                    Text(targetLanguage, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(targetLanguage, fontSize = 12.sp, color = Color(0xFFE2E8F0), fontWeight = FontWeight.Medium)
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
                                 }
                             }
                             DropdownMenu(
@@ -195,145 +253,340 @@ fun LiveTranslateScreen(
 
                         // Connection Status Pill
                         val (statusText, statusColor, statusIcon) = when (connectionState) {
-                            ConnectionState.CONNECTED -> Triple("WebSocket 已连接", MaterialTheme.colorScheme.primary, Icons.Default.Link)
-                            ConnectionState.CONNECTING -> Triple("正在连接...", Color(0xFFF57F17), Icons.Default.Link)
-                            ConnectionState.ERROR -> Triple("连接错误", MaterialTheme.colorScheme.error, Icons.Default.LinkOff)
-                            else -> Triple("WebSocket 未连接", MaterialTheme.colorScheme.onSurfaceVariant, Icons.Default.LinkOff)
+                            ConnectionState.CONNECTED -> Triple("已连接", Color(0xFF3B82F6), Icons.Default.Link)
+                            ConnectionState.CONNECTING -> Triple("连接中", Color(0xFFF59E0B), Icons.Default.Link)
+                            ConnectionState.ERROR -> Triple("错误", Color(0xFFEF4444), Icons.Default.LinkOff)
+                            else -> Triple("未连接", Color(0xFF64748B), Icons.Default.LinkOff)
                         }
-                        
+
                         Surface(
                             color = Color.Transparent,
-                            shape = RoundedCornerShape(6.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155)),
                             modifier = Modifier.clickable { viewModel.toggleConnect() }
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                             ) {
-                                Icon(statusIcon, contentDescription = null, tint = statusColor, modifier = Modifier.size(14.dp))
+                                Icon(statusIcon, contentDescription = null, tint = statusColor, modifier = Modifier.size(13.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(statusText, fontSize = 12.sp, color = statusColor)
+                                Text(statusText, fontSize = 11.sp, color = statusColor)
                             }
                         }
                     }
                 },
                 actions = {
                     IconButton(onClick = { viewModel.setShowSettingsDialog(true) }) {
-                        Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                    containerColor = Color(0xFF0F172A)
                 )
             )
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = Color(0xFF020617)
     ) { innerPadding ->
         Column(
             modifier = modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Split Content Area
+            // Main Split Transcription & Translation Area
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                // Top Half: Original Text
+                // Top Half: Original Spoken Text (原文转写)
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .padding(20.dp)
+                        .background(Color(0xFF0F172A).copy(alpha = 0.9f))
+                        .padding(horizontal = 20.dp, vertical = 16.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "原文转写",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Text(
-                        text = liveOriginalText.ifEmpty { "点击下方麦克风按钮开始实时同传。" },
-                        fontSize = fontSize.sp,
-                        fontStyle = if (liveOriginalText.isEmpty()) FontStyle.Italic else FontStyle.Normal,
-                        color = if (liveOriginalText.isEmpty()) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface,
-                        lineHeight = (fontSize + 10).sp
-                    )
-                }
-
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline, thickness = 1.dp)
-
-                // Bottom Half: Translated Text
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .padding(20.dp)
-                ) {
+                    // Header Row
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(bottom = 12.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "实时翻译 ($targetLanguage)",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        if (isRecording) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .scale(pulseScale)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFEF4444))
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF64748B))
                             )
                         }
-
-                        // Mute button icon
-                        Surface(
-                            color = Color.Transparent,
-                            shape = RoundedCornerShape(4.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Icon(Icons.Default.VolumeOff, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("关", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (connectionState == ConnectionState.CONNECTING) {
+                                "正在连接…"
+                            } else if (isRecording) {
+                                "正在识别语音 (实时转写)"
+                            } else {
+                                "原文转写"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF94A3B8),
+                            letterSpacing = 0.5.sp
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    // Text Content Area
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollStateTop)
+                    ) {
+                        val hasOrig = originalBase.isNotEmpty() || originalLive.isNotEmpty()
+                        if (!hasOrig) {
+                            if (isRecording) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .scale(pulseScale)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFEF4444))
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "正在聆听，请开始说话…",
+                                        fontSize = 18.sp,
+                                        fontStyle = FontStyle.Italic,
+                                        color = Color(0xFF94A3B8)
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = "点击下方麦克风按钮开始实时同传。",
+                                    fontSize = 18.sp,
+                                    fontStyle = FontStyle.Italic,
+                                    color = Color(0xFF64748B),
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+                        } else {
+                            val inlineContentOrig = mapOf(
+                                "cursor_orig" to InlineTextContent(
+                                    Placeholder(
+                                        width = 6.sp,
+                                        height = (fontSize * 0.75).sp,
+                                        placeholderVerticalAlign = PlaceholderVerticalAlign.Center
+                                    )
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(2.5.dp)
+                                            .height((fontSize * 0.7).dp)
+                                            .clip(RoundedCornerShape(1.dp))
+                                            .background(Color(0xFF3B82F6).copy(alpha = cursorAlphaOrig))
+                                    )
+                                }
+                            )
 
-                    Text(
-                        text = liveTranslatedText.ifEmpty { "点击下方麦克风按钮开始实时同传。" },
-                        fontSize = fontSize.sp,
-                        fontStyle = if (liveTranslatedText.isEmpty()) FontStyle.Italic else FontStyle.Normal,
-                        color = if (liveTranslatedText.isEmpty()) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface,
-                        lineHeight = (fontSize + 10).sp
-                    )
+                            val annotatedOrig = buildAnnotatedString {
+                                if (originalBase.isNotEmpty()) {
+                                    withStyle(SpanStyle(color = Color(0xFF94A3B8), fontWeight = FontWeight.Light)) {
+                                        append(originalBase)
+                                    }
+                                }
+                                if (originalBase.isNotEmpty() && originalLive.isNotEmpty()) {
+                                    append("\n\n")
+                                }
+                                if (originalLive.isNotEmpty()) {
+                                    withStyle(SpanStyle(color = Color(0xFFF8FAFC), fontWeight = FontWeight.Normal)) {
+                                        append(originalLive)
+                                    }
+                                    if (isRecording) {
+                                        append(" ")
+                                        appendInlineContent("cursor_orig", "[cursor]")
+                                    }
+                                }
+                            }
+
+                            Text(
+                                text = annotatedOrig,
+                                fontSize = fontSize.sp,
+                                lineHeight = (fontSize * 1.4).sp,
+                                inlineContent = inlineContentOrig
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = Color(0xFF1E293B), thickness = 1.dp)
+
+                // Bottom Half: Translated Text Stream (实时翻译流)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .background(Color(0xFF020617))
+                        .padding(horizontal = 20.dp, vertical = 16.dp)
+                ) {
+                    // Header Row
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    ) {
+                        if (isRecording) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .scale(pulseScale)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF10B981))
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF64748B))
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "实时翻译流 ($targetLanguage)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF94A3B8),
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+
+                    // Text Content Area
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollStateBottom)
+                    ) {
+                        val hasTrans = translatedBase.isNotEmpty() || translatedLive.isNotEmpty()
+                        if (!hasTrans) {
+                            if (isRecording) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .scale(pulseScale)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF10B981))
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "翻译将实时显示在这里…",
+                                        fontSize = 18.sp,
+                                        fontStyle = FontStyle.Italic,
+                                        color = Color(0xFF64748B)
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = "点击下方麦克风按钮开始实时同传。",
+                                    fontSize = 18.sp,
+                                    fontStyle = FontStyle.Italic,
+                                    color = Color(0xFF64748B),
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+                        } else {
+                            val inlineContentTrans = mapOf(
+                                "cursor_trans" to InlineTextContent(
+                                    Placeholder(
+                                        width = 6.sp,
+                                        height = (fontSize * 0.75).sp,
+                                        placeholderVerticalAlign = PlaceholderVerticalAlign.Center
+                                    )
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(2.5.dp)
+                                            .height((fontSize * 0.7).dp)
+                                            .clip(RoundedCornerShape(1.dp))
+                                            .background(Color(0xFF818CF8).copy(alpha = cursorAlphaTrans))
+                                    )
+                                }
+                            )
+
+                            val liveGradientBrush = Brush.horizontalGradient(
+                                listOf(
+                                    Color(0xFF60A5FA), // blue-400
+                                    Color(0xFFA5B4FC), // indigo-300
+                                    Color(0xFFC084FC)  // purple-400
+                                )
+                            )
+
+                            val annotatedTrans = buildAnnotatedString {
+                                if (translatedBase.isNotEmpty()) {
+                                    withStyle(SpanStyle(color = Color(0xFF94A3B8), fontWeight = FontWeight.SemiBold)) {
+                                        append(translatedBase)
+                                    }
+                                }
+                                if (translatedBase.isNotEmpty() && translatedLive.isNotEmpty()) {
+                                    append("\n\n")
+                                }
+                                if (translatedLive.isNotEmpty()) {
+                                    withStyle(
+                                        SpanStyle(
+                                            brush = liveGradientBrush,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    ) {
+                                        append(translatedLive)
+                                    }
+                                    if (isRecording) {
+                                        append(" ")
+                                        appendInlineContent("cursor_trans", "[cursor]")
+                                    }
+                                }
+                            }
+
+                            Text(
+                                text = annotatedTrans,
+                                fontSize = fontSize.sp,
+                                lineHeight = (fontSize * 1.4).sp,
+                                inlineContent = inlineContentTrans
+                            )
+                        }
+                    }
                 }
             }
 
-            // Bottom Floating Bar
+            // Bottom Control Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(100.dp)
-                    .background(MaterialTheme.colorScheme.surface),
+                    .height(96.dp)
+                    .background(Color(0xFF0F172A))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Mic Button
+                // Large Mic Button
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier.size(64.dp)
@@ -344,12 +597,12 @@ fun LiveTranslateScreen(
                                 .fillMaxSize()
                                 .scale(pulseScale)
                                 .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+                                .background(Color(0xFFDC2626).copy(alpha = 0.25f))
                         )
                     }
 
                     val micBgColor by animateColorAsState(
-                        targetValue = if (isRecording) MaterialTheme.colorScheme.primary else Color(0xFF1E3A8A), // Darker blue if off
+                        targetValue = if (isRecording) Color(0xFFDC2626) else Color(0xFF2563EB),
                         label = "micBgColor"
                     )
 
@@ -357,7 +610,7 @@ fun LiveTranslateScreen(
                         shape = CircleShape,
                         color = micBgColor,
                         modifier = Modifier
-                            .size(52.dp)
+                            .size(54.dp)
                             .clickable {
                                 if (hasMicPermission) {
                                     viewModel.toggleRecording()
@@ -366,106 +619,199 @@ fun LiveTranslateScreen(
                                 }
                             }
                     ) {
-                        Icon(
-                            imageVector = if (isRecording) Icons.Default.Mic else Icons.Default.MicOff,
-                            contentDescription = "Microphone",
-                            tint = Color.White,
-                            modifier = Modifier
-                                .padding(14.dp)
-                                .fillMaxSize()
-                        )
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                            if (connectionState == ConnectionState.CONNECTING) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 2.5.dp,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (isRecording) Icons.Default.Mic else Icons.Default.MicOff,
+                                    contentDescription = "Microphone",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(14.dp))
 
-                // Status Indicator Area
-                Column(verticalArrangement = Arrangement.Center) {
-                    // Pill
-                    val pillBorder = if (isRecording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    val pillBg = if (isRecording) MaterialTheme.colorScheme.primary.copy(alpha=0.1f) else MaterialTheme.colorScheme.error.copy(alpha=0.1f)
-                    val pillText = if (isRecording) "麦克风已开启" else "麦克风已关闭"
-                    val pillTextColor = if (isRecording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = pillBg,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, pillBorder)
+                // Status, Mic Gain Slider, Clear Button, and Token Usage
+                Column(
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    // Top Row: Mic Status Pill + Mic Gain Slider + Clear Button
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        // Mic Status Badge with Animated Equalizer Bars
+                        val pillBorder = if (isRecording) Color(0xFF3B82F6).copy(alpha = 0.6f) else Color(0xFF7F1D1D).copy(alpha = 0.6f)
+                        val pillBg = if (isRecording) Color(0xFF0F172A) else Color(0xFF450A0A).copy(alpha = 0.4f)
+                        val pillText = if (isRecording) "麦克风已激活" else "麦克风已关闭"
+                        val pillTextColor = if (isRecording) Color(0xFF60A5FA) else Color(0xFFF87171)
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = pillBg,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, pillBorder)
                         ) {
-                            Text(
-                                text = pillText,
-                                fontSize = 11.sp,
-                                color = pillTextColor
-                            )
-                            if (isRecording) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                
-                                val animatedVolume by androidx.compose.animation.core.animateFloatAsState(
-                                    targetValue = audioVolume.coerceIn(0f, 1f),
-                                    animationSpec = androidx.compose.animation.core.tween(durationMillis = 100),
-                                    label = "volumeAnim"
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = pillText,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = pillTextColor
                                 )
-                                
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                    modifier = Modifier.height(14.dp)
-                                ) {
-                                    val multipliers = listOf(0.4f, 0.8f, 1.0f, 0.7f, 0.5f)
-                                    multipliers.forEach { multiplier ->
-                                        val barHeightMultiplier = (animatedVolume * multiplier * 2.5f).coerceIn(0.15f, 1.0f)
-                                        Box(
-                                            modifier = Modifier
-                                                .width(3.dp)
-                                                .height(14.dp * barHeightMultiplier)
-                                                .clip(RoundedCornerShape(1.5.dp))
-                                                .background(MaterialTheme.colorScheme.primary)
-                                        )
+                                if (isRecording) {
+                                    Spacer(modifier = Modifier.width(5.dp))
+
+                                    val animatedVolume by animateFloatAsState(
+                                        targetValue = audioVolume.coerceIn(0f, 1f),
+                                        animationSpec = tween(durationMillis = 80),
+                                        label = "volumeAnim"
+                                    )
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        modifier = Modifier.height(14.dp)
+                                    ) {
+                                        val multipliers = listOf(0.5f, 0.8f, 1.0f, 0.7f, 0.6f)
+                                        multipliers.forEach { multiplier ->
+                                            val barHeightMultiplier = (animatedVolume * multiplier * 2.5f).coerceIn(0.2f, 1.0f)
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(2.dp)
+                                                    .height(14.dp * barHeightMultiplier)
+                                                    .clip(RoundedCornerShape(1.dp))
+                                                    .background(Color(0xFF3B82F6))
+                                            )
+                                        }
                                     }
+                                } else {
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .width(14.dp)
+                                            .height(2.dp)
+                                            .clip(RoundedCornerShape(1.dp))
+                                            .background(Color(0xFFEF4444))
+                                    )
                                 }
+                            }
+                        }
+
+                        // Mic Gain / Volume Slider Capsule
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF1E293B).copy(alpha = 0.8f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "音量",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF94A3B8),
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                androidx.compose.material3.Slider(
+                                    value = micGain,
+                                    onValueChange = { viewModel.updateMicGain(it) },
+                                    valueRange = 0.0f..1.0f,
+                                    modifier = Modifier
+                                        .width(90.dp)
+                                        .height(24.dp),
+                                    colors = androidx.compose.material3.SliderDefaults.colors(
+                                        thumbColor = Color(0xFF3B82F6),
+                                        activeTrackColor = Color(0xFF3B82F6),
+                                        inactiveTrackColor = Color(0xFF334155)
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "${(micGain * 100).toInt()}%",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF93C5FD),
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.width(36.dp)
+                                )
+                            }
+                        }
+
+                        // Clear Button ("清空")
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF1E293B).copy(alpha = 0.8f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155)),
+                            modifier = Modifier.clickable { viewModel.clearAllText() }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "清空",
+                                    tint = Color(0xFF94A3B8),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "清空",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFE2E8F0)
+                                )
                             }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Token usage row. Mirrors desktop-client App.tsx: shown
-                    // only while we're mid-session or already have a non-zero
-                    // count, so an idle, fresh-launched app doesn't show 0/0/0.
+                    // Bottom Row: Token Usage Badge
                     val showTokens = isRecording ||
-                        connectionState == ConnectionState.CONNECTING ||
-                        connectionState == ConnectionState.CONNECTED ||
-                        tokenUsage.inputTokens > 0L ||
-                        tokenUsage.outputTokens > 0L
+                            connectionState == ConnectionState.CONNECTING ||
+                            connectionState == ConnectionState.CONNECTED ||
+                            tokenUsage.inputTokens > 0L ||
+                            tokenUsage.outputTokens > 0L
                     if (showTokens) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Tokens  ", fontSize = 9.sp, color = MaterialTheme.colorScheme.outline)
-                            Text("入 ", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Tokens  ", fontSize = 10.sp, color = Color(0xFF64748B))
+                            Text("入 ", fontSize = 10.sp, color = Color(0xFF94A3B8))
                             Text(
                                 text = formatTokens(tokenUsage.inputTokens),
-                                fontSize = 9.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = Color(0xFF93C5FD)
                             )
-                            Text(" | ", fontSize = 9.sp, color = MaterialTheme.colorScheme.outline)
-                            Text("出 ", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(" | ", fontSize = 10.sp, color = Color(0xFF475569))
+                            Text("出 ", fontSize = 10.sp, color = Color(0xFF94A3B8))
                             Text(
                                 text = formatTokens(tokenUsage.outputTokens),
-                                fontSize = 9.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = Color(0xFF6EE7B7)
                             )
-                            Text(" | ", fontSize = 9.sp, color = MaterialTheme.colorScheme.outline)
-                            Text("合 ", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(" | ", fontSize = 10.sp, color = Color(0xFF475569))
+                            Text("合 ", fontSize = 10.sp, color = Color(0xFF94A3B8))
                             Text(
                                 text = formatTokens(tokenUsage.inputTokens + tokenUsage.outputTokens),
-                                fontSize = 9.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = Color(0xFFF8FAFC)
                             )
                         }
                     }
@@ -483,16 +829,17 @@ fun LiveTranslateScreen(
     }
 
     if (showSettingsDialog) {
-        val selectedDevice by viewModel.selectedDevice.collectAsState()
         SettingsDialog(
             serverUrl = serverUrl,
+            sourceLanguage = sourceLanguage,
             vadSilenceMs = vadSilenceMs,
             fontSize = fontSize,
             keepScreenOn = keepScreenOn,
             availableDevices = availableDevices,
             selectedDevice = selectedDevice,
-            onSave = { newUrl, vad, font, keepScreen, deviceId ->
+            onSave = { newUrl, newSourceLang, vad, font, keepScreen, deviceId ->
                 viewModel.updateServerUrl(newUrl)
+                viewModel.updateSourceLanguage(newSourceLang)
                 viewModel.updateVadSilenceMs(vad)
                 viewModel.updateFontSize(font)
                 viewModel.updateKeepScreenOn(keepScreen)

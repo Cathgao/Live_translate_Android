@@ -42,6 +42,27 @@ class AudioRecorder(
     private val _recordingError = MutableStateFlow<String?>(null)
     val recordingError: StateFlow<String?> = _recordingError.asStateFlow()
 
+    @Volatile
+    private var micGain: Float = 1.0f
+
+    fun setMicGain(gain: Float) {
+        micGain = gain.coerceIn(0.0f, 1.0f)
+    }
+
+    private fun applyGain(pcmBytes: ByteArray, gain: Float): ByteArray {
+        if (gain == 1.0f) return pcmBytes
+        val result = ByteArray(pcmBytes.size)
+        var i = 0
+        while (i < pcmBytes.size - 1) {
+            val sample = ((pcmBytes[i].toInt() and 0xFF) or (pcmBytes[i + 1].toInt() shl 8)).toShort()
+            val scaled = (sample * gain).toInt().coerceIn(-32768, 32767).toShort()
+            result[i] = (scaled.toInt() and 0xFF).toByte()
+            result[i + 1] = ((scaled.toInt() shr 8) and 0xFF).toByte()
+            i += 2
+        }
+        return result
+    }
+
     @SuppressLint("MissingPermission")
     fun startRecording(
         sampleRate: Int = 16000,
@@ -189,15 +210,22 @@ class AudioRecorder(
                         rawChunk
                     }
 
-                    // Step B: Calculate RMS volume
-                    val volume = calculateRMSVolume(monoBytes, monoBytes.size)
-                    _audioVolume.value = volume
-
-                    // Step C: Resample to target rate (e.g. 16000 Hz) if needed
-                    val outBytes = if (captureSampleRate != sampleRate) {
-                        resample(monoBytes, captureSampleRate, sampleRate)
+                    // Step B: Apply software gain scaling if configured
+                    val gainedBytes = if (micGain != 1.0f) {
+                        applyGain(monoBytes, micGain)
                     } else {
                         monoBytes
+                    }
+
+                    // Step C: Calculate RMS volume
+                    val volume = calculateRMSVolume(gainedBytes, gainedBytes.size)
+                    _audioVolume.value = volume
+
+                    // Step D: Resample to target rate (e.g. 16000 Hz) if needed
+                    val outBytes = if (captureSampleRate != sampleRate) {
+                        resample(gainedBytes, captureSampleRate, sampleRate)
+                    } else {
+                        gainedBytes
                     }
 
                     onAudioData(outBytes)

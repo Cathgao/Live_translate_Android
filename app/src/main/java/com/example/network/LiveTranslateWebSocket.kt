@@ -26,8 +26,10 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 
 class LiveTranslateWebSocket(
-    private val onTranslationReceived: (originalText: String, translatedText: String, isFinal: Boolean) -> Unit,
-    private val onAudioOutputReceived: (ByteArray) -> Unit,
+    private val onTranscriptionDelta: (originalDelta: String, translatedDelta: String, isFinished: Boolean) -> Unit,
+    private val onTranscriptionFinished: () -> Unit = {},
+    private val onTranscriptionInterrupted: () -> Unit = {},
+    private val onAudioOutputReceived: (ByteArray) -> Unit = {},
     private val onUsageReceived: (inputTokens: Long, outputTokens: Long) -> Unit = { _, _ -> }
 ) {
 
@@ -57,7 +59,13 @@ class LiveTranslateWebSocket(
 
     private data class PendingChunk(val bytes: ByteArray, val sampleRate: Int)
 
-    fun connect(url: String, protocolMode: ProtocolMode, targetLang: String = "Chinese (Simplified)", vadSilenceMs: Int = 1000) {
+    fun connect(
+        url: String,
+        protocolMode: ProtocolMode,
+        sourceLang: String = "Auto",
+        targetLang: String = "Chinese (Simplified)",
+        vadSilenceMs: Int = 1000
+    ) {
         if (_connectionState.value == ConnectionState.CONNECTING || _connectionState.value == ConnectionState.CONNECTED) {
             disconnect()
         }
@@ -68,18 +76,20 @@ class LiveTranslateWebSocket(
         pendingChunks.clear()
 
         val targetCode = when (targetLang) {
-            "Chinese (Simplified)", "中文" -> "zh"
-            "English" -> "en"
-            "Japanese", "日本語" -> "ja"
-            "Korean", "한국어" -> "ko"
-            "Spanish", "Español" -> "es"
-            "French", "Français" -> "fr"
-            "German", "Deutsch" -> "de"
-            else -> "zh"
+            "Chinese (Simplified)", "中文", "zh" -> "zh"
+            "English", "en" -> "en"
+            "Japanese", "日本語", "ja" -> "ja"
+            "Korean", "한국어", "ko" -> "ko"
+            "Spanish", "Español", "es" -> "es"
+            "French", "Français", "fr" -> "fr"
+            "German", "Deutsch", "de" -> "de"
+            else -> targetLang
         }
 
         val finalUrl = if (!url.contains("?")) {
-            "$url?source=Auto&target=$targetCode&silenceMs=$vadSilenceMs"
+            val encodedSource = java.net.URLEncoder.encode(sourceLang, "UTF-8")
+            val encodedTarget = java.net.URLEncoder.encode(targetCode, "UTF-8")
+            "$url?source=$encodedSource&target=$encodedTarget&silenceMs=$vadSilenceMs"
         } else {
             url
         }
@@ -223,50 +233,37 @@ class LiveTranslateWebSocket(
         }
     }
 
-    /**
-     * Send an explicit Gemini-Realtime-style setup message after [onOpen].
-     *
-     * Deprecated: the live translation server we target uses the
-     * `audioBlob` JSON protocol (matching `desktop-client/src/ws.ts`) and
-     * configures itself from URL query parameters. Sending this setup
-     * frame to that server is harmless but wasteful, so we no longer call
-     * it from [createListener]. Retained here for future re-use if a user
-     * switches protocol mode back to GEMINI_REALTIME_JSON and points the
-     * app at a Gemini Live API endpoint.
-     */
-    @Deprecated("Server is configured via URL query parameters; no setup frame is sent.")
-    private fun sendInitialSetup(ws: WebSocket, targetLang: String) {
-        try {
-            val setupJson = JSONObject().apply {
-                put("setup", JSONObject().apply {
-                    put("model", "models/gemini-2.0-flash-exp")
-                    put("generation_config", JSONObject().apply {
-                        put("response_modalities", JSONArray().apply { put("TEXT"); put("AUDIO") })
-                    })
-                    put("system_instruction", JSONObject().apply {
-                        put("parts", JSONArray().apply {
-                            put(JSONObject().apply {
-                                put("text", "You are a real-time live interpreter. Translate all incoming audio or speech immediately into $targetLang accurately and concisely.")
-                            })
-                        })
-                    })
-                })
-            }
-            ws.send(setupJson.toString())
-            addLog(LogType.SENT, "Setup", "Sent live translation setup message ($targetLang)")
-        } catch (e: Exception) {
-            Log.e("LiveTranslateWS", "Error sending setup message", e)
-        }
-    }
-
     private fun parseTextMessage(jsonText: String) {
         try {
             val root = JSONObject(jsonText)
+            val msgType = root.optString("type", "")
 
-            if (root.optString("type") == "usage") {
+            if (msgType == "ping") {
+                webSocket?.send(JSONObject().apply { put("type", "pong") }.toString())
+                return
+            }
+
+            if (msgType == "usage") {
                 val input = root.optLong("inputTokens", 0L).coerceAtLeast(0L)
                 val output = root.optLong("outputTokens", 0L).coerceAtLeast(0L)
                 onUsageReceived(input, output)
+                return
+            }
+
+            if (msgType == "transcription_finished") {
+                onTranscriptionFinished()
+                return
+            }
+
+            if (msgType == "transcription_interrupted") {
+                onTranscriptionInterrupted()
+                return
+            }
+
+            if (msgType == "translation_audio" && root.has("audio")) {
+                val base64Audio = root.getString("audio")
+                val decodedBytes = Base64.decode(base64Audio, Base64.NO_WRAP)
+                onAudioOutputReceived(decodedBytes)
                 return
             }
 
@@ -274,15 +271,15 @@ class LiveTranslateWebSocket(
             var translatedText = ""
             var isFinal = false
 
-            // Desktop-client compatible shape (live endpoint):
+            // Desktop-client / Web Live-Translate compatible shape (type: transcription or direct keys):
             if (root.has("originalText") || root.has("translatedText")) {
                 originalText = root.optString("originalText", root.optString("original", ""))
                 translatedText = root.optString("translatedText", root.optString("translation", ""))
-                isFinal = root.optBoolean("finished", root.optBoolean("is_final", true))
+                isFinal = root.optBoolean("finished", root.optBoolean("is_final", false))
             } else if (root.has("original") || root.has("translation")) {
                 originalText = root.optString("original", root.optString("text", ""))
                 translatedText = root.optString("translation", root.optString("translated", ""))
-                isFinal = root.optBoolean("is_final", true)
+                isFinal = root.optBoolean("is_final", false)
             } else if (root.has("serverContent")) {
                 // Gemini Live API serverContent payload format
                 val serverContent = root.getJSONObject("serverContent")
@@ -297,7 +294,7 @@ class LiveTranslateWebSocket(
                     }
                 }
                 if (serverContent.has("turnComplete")) {
-                    isFinal = serverContent.optBoolean("turnComplete", true)
+                    isFinal = serverContent.optBoolean("turnComplete", false)
                 }
             } else if (root.has("candidates")) {
                 val candidates = root.getJSONArray("candidates")
@@ -317,22 +314,23 @@ class LiveTranslateWebSocket(
                 originalText = root.getString("transcript")
             }
 
-            // Embedded Base64 audio if present (desktop-client compatible key
-            // is `audio`).
+            // Embedded Base64 audio if present
             if (root.has("audio")) {
                 val base64Audio = root.getString("audio")
                 val decodedBytes = Base64.decode(base64Audio, Base64.NO_WRAP)
                 onAudioOutputReceived(decodedBytes)
             }
 
-            if (originalText.isNotBlank() || translatedText.isNotBlank()) {
-                onTranslationReceived(originalText, translatedText, isFinal)
+            if (originalText.isNotEmpty() || translatedText.isNotEmpty()) {
+                onTranscriptionDelta(originalText, translatedText, isFinal)
+            } else if (isFinal) {
+                onTranscriptionFinished()
             }
 
         } catch (e: Exception) {
             // Non-JSON text or direct text frame
             if (jsonText.isNotBlank()) {
-                onTranslationReceived("", jsonText, true)
+                onTranscriptionDelta("", jsonText, true)
             }
         }
     }
