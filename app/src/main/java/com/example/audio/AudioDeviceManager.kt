@@ -68,8 +68,10 @@ class AudioDeviceManager(private val context: Context) {
 
             val sampleRates = if (device.sampleRates.isNotEmpty()) {
                 device.sampleRates.joinToString(", ") + " Hz"
+            } else if (isUsb) {
+                "48000 Hz (USB Audio)"
             } else {
-                "16000, 24000, 44100 Hz"
+                "16000, 44100, 48000 Hz"
             }
 
             devices.add(

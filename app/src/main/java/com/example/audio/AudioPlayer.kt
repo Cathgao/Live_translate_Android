@@ -6,44 +6,83 @@ import android.media.AudioTrack
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class AudioPlayer {
 
+    companion object {
+        private const val TAG = "AudioPlayer"
+    }
+
     private var audioTrack: AudioTrack? = null
     private val scope = CoroutineScope(Dispatchers.IO)
+    private var playerJob: Job? = null
+    private val audioQueue = Channel<Pair<ByteArray, Int>>(Channel.UNLIMITED)
+    private val mutex = Mutex()
     private var currentSampleRate = 24000
 
-    fun playPcmChunk(pcmData: ByteArray, sampleRate: Int = 24000) {
-        if (pcmData.isEmpty()) return
+    init {
+        startPlaybackLoop()
+    }
 
-        scope.launch {
-            try {
-                if (audioTrack == null || currentSampleRate != sampleRate) {
-                    initAudioTrack(sampleRate)
-                }
+    private fun startPlaybackLoop() {
+        playerJob?.cancel()
+        playerJob = scope.launch {
+            while (isActive) {
+                try {
+                    val (pcmData, sampleRate) = audioQueue.receive()
+                    if (pcmData.isEmpty()) continue
 
-                audioTrack?.let { track ->
-                    if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                        track.play()
+                    mutex.withLock {
+                        if (audioTrack == null || currentSampleRate != sampleRate) {
+                            initAudioTrack(sampleRate)
+                        }
+
+                        audioTrack?.let { track ->
+                            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                                if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                    track.play()
+                                }
+                                track.write(pcmData, 0, pcmData.size)
+                            }
+                        }
                     }
-                    track.write(pcmData, 0, pcmData.size)
+                } catch (e: Exception) {
+                    if (isActive) {
+                        Log.e(TAG, "Error in playback loop", e)
+                    }
                 }
-            } catch (e: Exception) {
-                Log.e("AudioPlayer", "Error playing PCM chunk", e)
             }
         }
     }
 
+    fun playPcmChunk(pcmData: ByteArray, sampleRate: Int = 24000) {
+        if (pcmData.isEmpty()) return
+        audioQueue.trySend(Pair(pcmData, sampleRate))
+    }
+
     private fun initAudioTrack(sampleRate: Int) {
         try {
-            audioTrack?.release()
-            
+            audioTrack?.apply {
+                if (playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    stop()
+                }
+                release()
+            }
+            audioTrack = null
+
             val minBufferSize = AudioTrack.getMinBufferSize(
                 sampleRate,
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
+
+            val bufferSize = maxOf(minBufferSize * 4, 8192)
 
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
@@ -59,23 +98,35 @@ class AudioPlayer {
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .build()
                 )
-                .setBufferSizeInBytes((minBufferSize * 2).coerceAtLeast(4096))
+                .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
             currentSampleRate = sampleRate
+            Log.d(TAG, "AudioTrack initialized: sampleRate=$sampleRate, bufferSize=$bufferSize")
         } catch (e: Exception) {
-            Log.e("AudioPlayer", "Failed to initialize AudioTrack", e)
+            Log.e(TAG, "Failed to initialize AudioTrack", e)
         }
     }
 
     fun stop() {
-        try {
-            audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
-        } catch (e: Exception) {
-            Log.e("AudioPlayer", "Error stopping AudioTrack", e)
+        scope.launch {
+            mutex.withLock {
+                try {
+                    while (audioQueue.tryReceive().isSuccess) {
+                        // Drain queue
+                    }
+                    audioTrack?.apply {
+                        if (playState == AudioTrack.PLAYSTATE_PLAYING) {
+                            stop()
+                        }
+                        release()
+                    }
+                    audioTrack = null
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping AudioTrack", e)
+                }
+            }
         }
     }
 }

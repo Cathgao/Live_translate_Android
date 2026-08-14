@@ -120,6 +120,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val raw = prefs.getString(KEY_PROTOCOL_MODE, null)
             if (raw != null) _protocolMode.value = ProtocolMode.valueOf(raw)
         }
+
+        // Monitor audio device changes (e.g. USB mic plugged in or selected) to auto-migrate active recording
+        viewModelScope.launch {
+            var lastDeviceId = selectedDevice.value?.id
+            selectedDevice.collect { current ->
+                val currentId = current?.id
+                if (lastDeviceId != null && currentId != null && lastDeviceId != currentId) {
+                    if (isRecording.value) {
+                        audioRecorder.stopRecording()
+                        startRecording()
+                    }
+                }
+                lastDeviceId = currentId
+            }
+        }
     }
 
     private fun persist() {
