@@ -1,5 +1,6 @@
 package com.example
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -22,7 +23,9 @@ import com.example.ui.LiveTranslateScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.viewmodel.MainViewModel
 
+@SuppressLint("InvalidFragmentVersionForActivityResult")
 class MainActivity : ComponentActivity() {
+
     companion object {
         private const val TAG = "MainActivity"
         private const val DEBOUNCE_INTERVAL_MS = 300L
