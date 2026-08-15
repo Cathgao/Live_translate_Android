@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.audio.AudioDeviceManager
 import com.example.audio.AudioPlayer
 import com.example.audio.AudioRecorder
+import com.example.hardware.SerialPortManager
 import com.example.model.AudioDeviceItem
 import com.example.model.ConnectionState
 import com.example.model.LogEntry
@@ -38,6 +39,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val audioDeviceManager = AudioDeviceManager(application)
     private val audioRecorder = AudioRecorder(application, audioDeviceManager)
     private val audioPlayer = AudioPlayer()
+
+    // Hardware Serial Port Manager for DWIN / DGUS Screen (/dev/ttyAS5)
+    private val serialPortManager = SerialPortManager(
+        devicePath = "/dev/ttyAS5",
+        onStartButtonPressed = {
+            if (!isRecording.value) {
+                startRecording()
+            }
+        },
+        onStopButtonPressed = {
+            if (isRecording.value) {
+                stopRecording()
+            }
+        }
+    )
 
     private val webSocket = LiveTranslateWebSocket(
         onTranscriptionDelta = { origDelta, transDelta, isFinished ->
@@ -132,7 +148,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingTrans: String = ""
     private var segmentCommitJob: kotlinx.coroutines.Job? = null
 
+    // Serial port paragraph buffers (accumulated until silence timer timeout)
+    private var serialCommittedOrig: String = ""
+    private var serialCommittedTrans: String = ""
+    private var lastSentOrig: String = ""
+    private var lastSentTrans: String = ""
+
     init {
+        // Start serial communication with screen
+        serialPortManager.start()
+
         // Restore persisted settings so they survive process restarts.
         val prefs = getApplication<Application>()
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -289,6 +314,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         segmentCommitJob?.cancel()
         segmentCommitJob = null
 
+        // Notify screen to switch to start page
+        serialPortManager.sendStartPage()
+
         val targetDeviceId = selectedDevice.value?.id
         audioRecorder.startRecording(
             sampleRate = _sampleRate.value,
@@ -301,6 +329,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopRecording() {
         audioRecorder.stopRecording()
         flushPending("stopRecording")
+        // Notify screen to switch to stop page
+        serialPortManager.sendStopPage()
     }
 
     fun toggleRecording() {
@@ -308,6 +338,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             stopRecording()
         } else {
             startRecording()
+        }
+    }
+
+    private fun joinParagraphText(prev: String, next: String): String {
+        val p = prev.trim()
+        val n = next.trim()
+        if (p.isEmpty()) return n
+        if (n.isEmpty()) return p
+        val lastChar = p.last()
+        val isCjk = lastChar.code in 0x4E00..0x9FFF || lastChar in "，。！？；：“”‘’"
+        return if (isCjk) "$p$n" else "$p $n"
+    }
+
+    private fun sendSerialParagraph(orig: String, trans: String) {
+        if (orig.isNotEmpty() && orig != lastSentOrig) {
+            lastSentOrig = orig
+            serialPortManager.sendOriginalText(orig)
+        }
+        if (trans.isNotEmpty() && trans != lastSentTrans) {
+            lastSentTrans = trans
+            serialPortManager.sendTranslatedText(trans)
         }
     }
 
@@ -325,6 +376,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _originalLive.value = pendingOrig
                 _translatedLive.value = pendingTrans
                 armSilenceCommit()
+
+                // Full paragraph update sent to serial screen (accumulated committed sentences + current live delta)
+                val currentFullOrig = joinParagraphText(serialCommittedOrig, pendingOrig)
+                val currentFullTrans = joinParagraphText(serialCommittedTrans, pendingTrans)
+                sendSerialParagraph(currentFullOrig, currentFullTrans)
             }
 
             if (isFinished) {
@@ -372,6 +428,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _translatedBase.value = if (_translatedBase.value.isEmpty()) finalTrans else "${_translatedBase.value}\n\n$finalTrans"
         }
 
+        if (reason == "silenceTimer") {
+            // Paragraph finished via silence timeout (not VAD):
+            // Clear serial paragraph buffer so next spoken speech starts a new paragraph.
+            serialCommittedOrig = ""
+            serialCommittedTrans = ""
+        } else if (reason == "stopRecording" || reason == "clearAll") {
+            serialCommittedOrig = ""
+            serialCommittedTrans = ""
+        } else {
+            // Sentence finished via VAD / isFinished / transcription_finished:
+            // Accumulate sentence to current paragraph and send full paragraph text
+            if (finalOrig.isNotEmpty()) {
+                serialCommittedOrig = joinParagraphText(serialCommittedOrig, finalOrig)
+            }
+            if (finalTrans.isNotEmpty()) {
+                serialCommittedTrans = joinParagraphText(serialCommittedTrans, finalTrans)
+            }
+            sendSerialParagraph(serialCommittedOrig, serialCommittedTrans)
+
+            // Continue running silence commit timer for paragraph timeout
+            if (isRecording.value) {
+                armSilenceCommit()
+            }
+        }
+
         pendingOrig = ""
         pendingTrans = ""
         _originalLive.value = ""
@@ -385,8 +466,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _translatedLive.value = ""
         pendingOrig = ""
         pendingTrans = ""
+        serialCommittedOrig = ""
+        serialCommittedTrans = ""
+        lastSentOrig = ""
+        lastSentTrans = ""
         segmentCommitJob?.cancel()
         segmentCommitJob = null
+        serialPortManager.sendOriginalText("")
+        serialPortManager.sendTranslatedText("")
     }
 
     fun clearLogs() {
@@ -407,9 +494,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        serialPortManager.stop()
         audioRecorder.stopRecording()
         audioPlayer.stop()
         webSocket.disconnect()
         segmentCommitJob?.cancel()
     }
 }
+
