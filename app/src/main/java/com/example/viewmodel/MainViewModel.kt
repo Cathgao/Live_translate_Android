@@ -315,11 +315,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _translatedLive.value = ""
         pendingOrig = ""
         pendingTrans = ""
+        serialCommittedOrig = ""
+        serialCommittedTrans = ""
+        lastSentOrig = ""
+        lastSentTrans = ""
         segmentCommitJob?.cancel()
         segmentCommitJob = null
 
         // Notify screen to switch to start page
         serialPortManager.sendStartPage()
+
+        // Clear both text boxes on screen when starting recording
+        serialPortManager.clearAllTextBoxes()
 
         // Turn on Mic LED (PI15=1, PI12=0)
         LedController.setMicState(true)
@@ -334,6 +341,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopRecording() {
+        segmentCommitJob?.cancel()
+        segmentCommitJob = null
         audioRecorder.stopRecording()
         flushPending("stopRecording")
         // Notify screen to switch to stop page
@@ -384,11 +393,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (hasMeaningfulDelta) {
                 _originalLive.value = pendingOrig
                 _translatedLive.value = pendingTrans
-                armSilenceCommit()
+                if (isRecording.value) {
+                    armSilenceCommit()
+                }
 
-                // Full paragraph update sent to serial screen (accumulated committed sentences + current live delta)
+                // Check combined paragraph capacity:
+                // Original limit: 1000 bytes (within DWIN 1024B limit), Translated limit: 900 bytes.
+                // If either exceeds its limit, commit current text, clear screen text boxes, and start new paragraph.
                 val currentFullOrig = joinParagraphText(serialCommittedOrig, pendingOrig)
                 val currentFullTrans = joinParagraphText(serialCommittedTrans, pendingTrans)
+
+                val origBytes = currentFullOrig.toByteArray(Charsets.UTF_16BE).size
+                val transBytes = currentFullTrans.toByteArray(Charsets.UTF_16BE).size
+
+                if (origBytes > SerialPortManager.MAX_ORIGINAL_TEXT_BYTES ||
+                    transBytes > SerialPortManager.MAX_TRANSLATED_TEXT_BYTES
+                ) {
+                    // Reached capacity: commit to history and clear both text boxes
+                    val fullOrigToCommit = currentFullOrig.trim()
+                    val fullTransToCommit = currentFullTrans.trim()
+                    if (fullOrigToCommit.isNotEmpty()) {
+                        _originalBase.value = if (_originalBase.value.isEmpty()) fullOrigToCommit else "${_originalBase.value}\n\n$fullOrigToCommit"
+                    }
+                    if (fullTransToCommit.isNotEmpty()) {
+                        _translatedBase.value = if (_translatedBase.value.isEmpty()) fullTransToCommit else "${_translatedBase.value}\n\n$fullTransToCommit"
+                    }
+
+                    serialCommittedOrig = ""
+                    serialCommittedTrans = ""
+                    pendingOrig = ""
+                    pendingTrans = ""
+                    lastSentOrig = ""
+                    lastSentTrans = ""
+                    _originalLive.value = ""
+                    _translatedLive.value = ""
+
+                    serialPortManager.clearAllTextBoxes()
+                    return@launch
+                }
+
                 sendSerialParagraph(currentFullOrig, currentFullTrans)
             }
 
@@ -417,9 +460,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun armSilenceCommit() {
         segmentCommitJob?.cancel()
+        if (!isRecording.value) return
         segmentCommitJob = viewModelScope.launch {
             kotlinx.coroutines.delay(SEGMENT_COMMIT_MS)
-            flushPending("silenceTimer")
+            if (isRecording.value) {
+                flushPending("silenceTimer")
+            }
         }
     }
 
@@ -437,27 +483,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _translatedBase.value = if (_translatedBase.value.isEmpty()) finalTrans else "${_translatedBase.value}\n\n$finalTrans"
         }
 
-        if (reason == "silenceTimer") {
-            // Paragraph finished via silence timeout (not VAD):
-            // Clear serial paragraph buffer so next spoken speech starts a new paragraph.
+        if (reason == "clearAll" || reason == "bufferOverflow") {
+            // Clear all or buffer overflow: clear serial paragraph buffers and send clear frames
             serialCommittedOrig = ""
             serialCommittedTrans = ""
-        } else if (reason == "stopRecording" || reason == "clearAll") {
-            serialCommittedOrig = ""
-            serialCommittedTrans = ""
+            lastSentOrig = ""
+            lastSentTrans = ""
+            serialPortManager.clearAllTextBoxes()
+        } else if (reason == "silenceTimer") {
+            if (isRecording.value) {
+                // Paragraph finished via silence timeout while recording is active:
+                // clear serial paragraph buffer so next speech starts fresh
+                serialCommittedOrig = ""
+                serialCommittedTrans = ""
+                lastSentOrig = ""
+                lastSentTrans = ""
+                serialPortManager.clearAllTextBoxes()
+            }
         } else {
-            // Sentence finished via VAD / isFinished / transcription_finished:
-            // Accumulate sentence to current paragraph and send full paragraph text
-            if (finalOrig.isNotEmpty()) {
-                serialCommittedOrig = joinParagraphText(serialCommittedOrig, finalOrig)
+            // Sentence finished via VAD / isFinished / transcription_finished / stopRecording:
+            val candidateOrig = if (finalOrig.isNotEmpty()) joinParagraphText(serialCommittedOrig, finalOrig) else serialCommittedOrig
+            val candidateTrans = if (finalTrans.isNotEmpty()) joinParagraphText(serialCommittedTrans, finalTrans) else serialCommittedTrans
+
+            val origBytes = candidateOrig.toByteArray(Charsets.UTF_16BE).size
+            val transBytes = candidateTrans.toByteArray(Charsets.UTF_16BE).size
+
+            if (origBytes > SerialPortManager.MAX_ORIGINAL_TEXT_BYTES ||
+                transBytes > SerialPortManager.MAX_TRANSLATED_TEXT_BYTES
+            ) {
+                // Either reached capacity limit: send 0xFFFF clear frames and start new paragraph with just this finished sentence
+                serialPortManager.clearAllTextBoxes()
+                serialCommittedOrig = finalOrig
+                serialCommittedTrans = finalTrans
+                lastSentOrig = ""
+                lastSentTrans = ""
+            } else {
+                serialCommittedOrig = candidateOrig
+                serialCommittedTrans = candidateTrans
             }
-            if (finalTrans.isNotEmpty()) {
-                serialCommittedTrans = joinParagraphText(serialCommittedTrans, finalTrans)
-            }
+
             sendSerialParagraph(serialCommittedOrig, serialCommittedTrans)
 
-            // Continue running silence commit timer for paragraph timeout
-            if (isRecording.value) {
+            // Continue running silence commit timer only if recording is still active
+            if (isRecording.value && reason != "stopRecording") {
                 armSilenceCommit()
             }
         }
@@ -481,8 +549,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         lastSentTrans = ""
         segmentCommitJob?.cancel()
         segmentCommitJob = null
-        serialPortManager.sendOriginalText("")
-        serialPortManager.sendTranslatedText("")
+        serialPortManager.clearAllTextBoxes()
     }
 
     fun clearLogs() {
