@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.audio.AudioDeviceManager
 import com.example.audio.AudioPlayer
 import com.example.audio.AudioRecorder
+import com.example.hardware.LedController
 import com.example.hardware.SerialPortManager
 import com.example.model.AudioDeviceItem
 import com.example.model.ConnectionState
@@ -155,6 +156,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var lastSentTrans: String = ""
 
     init {
+        // Initialize LED state (Mic OFF: PI15=0, PI12=1)
+        LedController.setMicState(false)
+
         // Start serial communication with screen
         serialPortManager.start()
 
@@ -317,6 +321,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Notify screen to switch to start page
         serialPortManager.sendStartPage()
 
+        // Turn on Mic LED (PI15=1, PI12=0)
+        LedController.setMicState(true)
+
         val targetDeviceId = selectedDevice.value?.id
         audioRecorder.startRecording(
             sampleRate = _sampleRate.value,
@@ -331,6 +338,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         flushPending("stopRecording")
         // Notify screen to switch to stop page
         serialPortManager.sendStopPage()
+        // Turn off Mic LED (PI15=0, PI12=1)
+        LedController.setMicState(false)
     }
 
     fun toggleRecording() {
@@ -494,6 +503,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        LedController.setMicState(false)
         serialPortManager.stop()
         audioRecorder.stopRecording()
         audioPlayer.stop()

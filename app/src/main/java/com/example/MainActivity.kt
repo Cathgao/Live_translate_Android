@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        startService(android.content.Intent(this, AppLifecycleService::class.java))
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
@@ -66,6 +67,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        com.example.hardware.LedController.setMicState(false)
     }
 
     override fun onResume() {

@@ -19,14 +19,14 @@ import java.io.FileOutputStream
  * - Frame Header: 0x5A 0xA5
  * - Text encoding: UTF-16BE (Big Endian)
  * - Text write frame: 5A A5 [Length] 82 [Address 2B] [UTF-16BE bytes]
- *   - Left text box: 0x1001
- *   - Right text box: 0x1401
+ *   - Original text box: 0x1401
+ *   - Translated text box: 0x1001
  * - Host switch page:
  *   - Start page: 5A A5 07 82 00 84 5A 01 00 01
  *   - Stop page: 5A A5 07 82 00 84 5A 01 00 03
  * - Screen button return:
- *   - Start button: 5A A5 06 83 20 01 01 00 01
- *   - Stop button: 5A A5 06 83 20 01 01 00 02
+ *   - Start button: 5A A5 06 83 20 01 01 00 02
+ *   - Stop button: 5A A5 06 83 20 01 01 00 01
  * - Send interval: >= 100ms
  */
 class SerialPortManager(
@@ -40,58 +40,94 @@ class SerialPortManager(
         const val SEND_INTERVAL_MS = 100L
 
         // Text Variable Addresses
-        const val ADDR_ORIGINAL_TEXT = 0x1001
-        const val ADDR_TRANSLATED_TEXT = 0x1401
+        const val ADDR_ORIGINAL_TEXT = 0x1401
+        const val ADDR_TRANSLATED_TEXT = 0x1001
+
+        // Buffer Limits
+        const val MAX_TEXT_BYTES = 900 // Max 450 UTF-16 code units (safe within screen's 1000B text box limit)
+        const val MAX_CHUNK_BYTES = 240 // Max chunk payload per frame (120 Words, well within DGUS 252B payload limit)
 
         private fun bytesOf(vararg ints: Int): ByteArray =
             ByteArray(ints.size) { ints[it].toByte() }
 
         // Button return frames from screen
-        val CMD_START_BUTTON = bytesOf(0x5A, 0xA5, 0x06, 0x83, 0x20, 0x01, 0x01, 0x00, 0x01)
-        val CMD_STOP_BUTTON  = bytesOf(0x5A, 0xA5, 0x06, 0x83, 0x20, 0x01, 0x01, 0x00, 0x02)
+        val CMD_START_BUTTON = bytesOf(0x5A, 0xA5, 0x06, 0x83, 0x20, 0x01, 0x01, 0x00, 0x02)
+        val CMD_STOP_BUTTON  = bytesOf(0x5A, 0xA5, 0x06, 0x83, 0x20, 0x01, 0x01, 0x00, 0x01)
 
         // Host page switch commands
         val CMD_SWITCH_START_PAGE = bytesOf(0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x01)
         val CMD_SWITCH_STOP_PAGE  = bytesOf(0x5A, 0xA5, 0x07, 0x82, 0x00, 0x84, 0x5A, 0x01, 0x00, 0x03)
 
         /**
-         * Construct a DWIN DGUS text display frame with 0xFFFF terminator.
-         * Format: 5A A5 [Length] 82 [Address High] [Address Low] [UTF-16BE bytes] FF FF
-         * Length = data bytes (including 2B 0xFFFF) + 3
+         * Safely trim text to not exceed maxBytes (UTF-16BE: 2 bytes per char).
+         * Discards the oldest characters from the beginning, preserving the newest content.
+         * Ensures surrogate pairs are not split.
          */
-        fun buildTextFrame(address: Int, text: String): ByteArray {
-            val rawBytes = text.toByteArray(Charsets.UTF_16BE)
+        fun trimToMaxBytes(text: String, maxBytes: Int = MAX_TEXT_BYTES): String {
+            val maxChars = maxBytes / 2
+            if (text.length <= maxChars) return text
 
-            // Cap raw text at 238 bytes (119 chars) so payload + 0xFFFF <= 240 bytes to prevent 1-byte length overflow
-            val maxRawBytes = 238
-            val cappedRaw = if (rawBytes.size > maxRawBytes) {
-                val evenMax = if (maxRawBytes % 2 != 0) maxRawBytes - 1 else maxRawBytes
-                rawBytes.copyOfRange(0, evenMax)
-            } else {
-                rawBytes
+            var startIndex = text.length - maxChars
+            // If startIndex points to a low surrogate, skip it to avoid dangling low surrogate
+            if (startIndex < text.length && Character.isLowSurrogate(text[startIndex])) {
+                startIndex++
             }
+            return text.substring(startIndex)
+        }
 
-            // Append 0xFFFF terminator
-            val payload = ByteArray(cappedRaw.size + 2)
-            if (cappedRaw.isNotEmpty()) {
-                System.arraycopy(cappedRaw, 0, payload, 0, cappedRaw.size)
+        /**
+         * Construct DWIN DGUS text display frames with automatic address offsetting.
+         * Total payload = trimmed UTF-16BE text (<= 900 bytes) + 2-byte 0xFFFF terminator.
+         * If total payload exceeds MAX_CHUNK_BYTES (240 bytes), it is chunked into multiple frames.
+         * DGUS VP RAM address increments by 1 for each Word (2 bytes), so chunkAddress = address + (byteOffset / 2).
+         *
+         * Format per frame: 5A A5 [Length] 82 [Address High] [Address Low] [Chunk UTF-16BE bytes]
+         * Length = chunk bytes + 3
+         */
+        fun buildTextFrames(address: Int, text: String): List<ByteArray> {
+            val trimmed = trimToMaxBytes(text, MAX_TEXT_BYTES)
+            val rawBytes = trimmed.toByteArray(Charsets.UTF_16BE)
+
+            // Append 0xFFFF terminator (2 bytes)
+            val payload = ByteArray(rawBytes.size + 2)
+            if (rawBytes.isNotEmpty()) {
+                System.arraycopy(rawBytes, 0, payload, 0, rawBytes.size)
             }
             payload[payload.size - 2] = 0xFF.toByte()
             payload[payload.size - 1] = 0xFF.toByte()
 
-            val length = (payload.size + 3).toByte()
-            val addrHigh = ((address shr 8) and 0xFF).toByte()
-            val addrLow = (address and 0xFF).toByte()
+            val frames = mutableListOf<ByteArray>()
+            var offset = 0
+            while (offset < payload.size) {
+                val chunkSize = minOf(MAX_CHUNK_BYTES, payload.size - offset)
+                val chunkBytes = payload.copyOfRange(offset, offset + chunkSize)
 
-            val frame = ByteArray(3 + (length.toInt() and 0xFF))
-            frame[0] = 0x5A.toByte()
-            frame[1] = 0xA5.toByte()
-            frame[2] = length
-            frame[3] = 0x82.toByte()
-            frame[4] = addrHigh
-            frame[5] = addrLow
-            System.arraycopy(payload, 0, frame, 6, payload.size)
-            return frame
+                // DGUS word address offset: 1 Word = 2 Bytes
+                val chunkAddress = address + (offset / 2)
+                val length = (chunkSize + 3).toByte()
+                val addrHigh = ((chunkAddress shr 8) and 0xFF).toByte()
+                val addrLow = (chunkAddress and 0xFF).toByte()
+
+                val frame = ByteArray(3 + (length.toInt() and 0xFF))
+                frame[0] = 0x5A.toByte()
+                frame[1] = 0xA5.toByte()
+                frame[2] = length
+                frame[3] = 0x82.toByte()
+                frame[4] = addrHigh
+                frame[5] = addrLow
+                System.arraycopy(chunkBytes, 0, frame, 6, chunkBytes.size)
+
+                frames.add(frame)
+                offset += chunkSize
+            }
+            return frames
+        }
+
+        /**
+         * Backward-compatible helper for single frame inspection.
+         */
+        fun buildTextFrame(address: Int, text: String): ByteArray {
+            return buildTextFrames(address, text).first()
         }
 
         fun ByteArray.toHexString(): String =
@@ -131,19 +167,25 @@ class SerialPortManager(
     }
 
     /**
-     * Send original transcript to left text box (0x1001).
+     * Send original transcript to text box (0x1401).
+     * Splits into multi-frame chunks if text + 0xFFFF exceeds 240 bytes.
      */
     fun sendOriginalText(text: String) {
-        val frame = buildTextFrame(ADDR_ORIGINAL_TEXT, text)
-        sendFrame(frame)
+        val frames = buildTextFrames(ADDR_ORIGINAL_TEXT, text)
+        for (frame in frames) {
+            sendFrame(frame)
+        }
     }
 
     /**
-     * Send translated text to right text box (0x1401).
+     * Send translated text to text box (0x1001).
+     * Splits into multi-frame chunks if text + 0xFFFF exceeds 240 bytes.
      */
     fun sendTranslatedText(text: String) {
-        val frame = buildTextFrame(ADDR_TRANSLATED_TEXT, text)
-        sendFrame(frame)
+        val frames = buildTextFrames(ADDR_TRANSLATED_TEXT, text)
+        for (frame in frames) {
+            sendFrame(frame)
+        }
     }
 
     /**
