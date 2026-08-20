@@ -223,18 +223,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateSourceLanguage(lang: String) {
+        if (_sourceLanguage.value == lang) return
         _sourceLanguage.value = lang
         persist()
+        if (connectionState.value == ConnectionState.CONNECTED || connectionState.value == ConnectionState.CONNECTING) {
+            webSocket.connect(
+                url = _serverUrl.value,
+                protocolMode = _protocolMode.value,
+                sourceLang = _sourceLanguage.value,
+                targetLang = _targetLanguage.value,
+                vadSilenceMs = _vadSilenceMs.value
+            )
+        }
     }
 
     fun updateTargetLanguage(lang: String) {
+        if (_targetLanguage.value == lang) return
         _targetLanguage.value = lang
         persist()
+        if (connectionState.value == ConnectionState.CONNECTED || connectionState.value == ConnectionState.CONNECTING) {
+            webSocket.connect(
+                url = _serverUrl.value,
+                protocolMode = _protocolMode.value,
+                sourceLang = _sourceLanguage.value,
+                targetLang = _targetLanguage.value,
+                vadSilenceMs = _vadSilenceMs.value
+            )
+        }
     }
 
     fun updateVadSilenceMs(ms: Int) {
+        if (_vadSilenceMs.value == ms) return
         _vadSilenceMs.value = ms
         persist()
+        if (connectionState.value == ConnectionState.CONNECTED || connectionState.value == ConnectionState.CONNECTING) {
+            webSocket.connect(
+                url = _serverUrl.value,
+                protocolMode = _protocolMode.value,
+                sourceLang = _sourceLanguage.value,
+                targetLang = _targetLanguage.value,
+                vadSilenceMs = _vadSilenceMs.value
+            )
+        }
     }
 
     fun updateFontSize(size: Int) {
@@ -249,12 +279,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateServerUrl(url: String) {
         val cleaned = url.trim()
+        if (_serverUrl.value == cleaned) return
         _serverUrl.value = cleaned
         getApplication<Application>()
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_SERVER_URL, cleaned)
             .apply()
+        if (connectionState.value == ConnectionState.CONNECTED || connectionState.value == ConnectionState.CONNECTING) {
+            webSocket.connect(
+                url = _serverUrl.value,
+                protocolMode = _protocolMode.value,
+                sourceLang = _sourceLanguage.value,
+                targetLang = _targetLanguage.value,
+                vadSilenceMs = _vadSilenceMs.value
+            )
+        }
     }
 
     fun updateProtocolModePersist(mode: ProtocolMode) {

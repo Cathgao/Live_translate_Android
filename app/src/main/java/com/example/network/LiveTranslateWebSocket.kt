@@ -75,26 +75,11 @@ class LiveTranslateWebSocket(
         sentChunksCount = 0
         pendingChunks.clear()
 
-        val targetCode = when (targetLang) {
-            "Chinese (Simplified)", "中文", "zh" -> "zh"
-            "English", "en" -> "en"
-            "Japanese", "日本語", "ja" -> "ja"
-            "Korean", "한국어", "ko" -> "ko"
-            "Spanish", "Español", "es" -> "es"
-            "French", "Français", "fr" -> "fr"
-            "German", "Deutsch", "de" -> "de"
-            else -> targetLang
-        }
+        val normalizedSource = normalizeSourceLanguage(sourceLang)
+        val normalizedTarget = normalizeTargetLanguage(targetLang)
+        val finalUrl = buildConnectionUrl(url, normalizedSource, normalizedTarget, vadSilenceMs)
 
-        val finalUrl = if (!url.contains("?")) {
-            val encodedSource = java.net.URLEncoder.encode(sourceLang, "UTF-8")
-            val encodedTarget = java.net.URLEncoder.encode(targetCode, "UTF-8")
-            "$url?source=$encodedSource&target=$encodedTarget&silenceMs=$vadSilenceMs"
-        } else {
-            url
-        }
-
-        addLog(LogType.SYSTEM, "Network", "Initiating WebSocket connection to $finalUrl (Mode: ${protocolMode.displayName})")
+        addLog(LogType.SYSTEM, "Network", "Initiating WebSocket connection to $finalUrl (Mode: ${protocolMode.displayName}, Target: $normalizedTarget)")
         _connectionState.value = ConnectionState.CONNECTING
 
         try {
@@ -106,6 +91,86 @@ class LiveTranslateWebSocket(
         } catch (e: Exception) {
             addLog(LogType.ERROR, "Network", "Connection initialization failed: ${e.message}")
             _connectionState.value = ConnectionState.ERROR
+        }
+    }
+
+    companion object {
+        fun normalizeTargetLanguage(lang: String): String {
+            return when (lang.trim()) {
+                "Chinese (Simplified)", "中文", "简体中文", "zh", "zh-CN", "zh-cn" -> "Chinese (Simplified)"
+                "Chinese (Traditional)", "繁体中文", "zh-TW", "zh-tw", "zh-HK" -> "Chinese (Traditional)"
+                "English", "英语", "英文", "en", "en-US", "en-GB" -> "English"
+                "Japanese", "日本語", "日语", "ja", "ja-JP" -> "Japanese"
+                "Korean", "한국어", "韩语", "ko", "ko-KR" -> "Korean"
+                "Spanish", "Español", "西班牙语", "es", "es-ES" -> "Spanish"
+                "French", "Français", "法语", "fr", "fr-FR" -> "French"
+                "German", "Deutsch", "德语", "de", "de-DE" -> "German"
+                "Russian", "Русский", "俄语", "ru" -> "Russian"
+                "Portuguese", "Português", "葡萄牙语", "pt" -> "Portuguese"
+                "Italian", "Italiano", "意大利语", "it" -> "Italian"
+                "Arabic", "العربية", "阿拉伯语", "ar" -> "Arabic"
+                "Hindi", "हिन्दी", "印地语", "hi" -> "Hindi"
+                "Vietnamese", "Tiếng Việt", "越南语", "vi" -> "Vietnamese"
+                "Thai", "ไทย", "泰语", "th" -> "Thai"
+                "Polish", "Polski", "波兰语", "pl" -> "Polish"
+                else -> lang.trim()
+            }
+        }
+
+        fun normalizeSourceLanguage(lang: String): String {
+            return when (lang.trim()) {
+                "Auto", "auto", "自动", "自动检测" -> "Auto"
+                "Chinese (Simplified)", "中文", "简体中文", "zh", "zh-CN" -> "Chinese (Simplified)"
+                "Chinese (Traditional)", "繁体中文", "zh-TW" -> "Chinese (Traditional)"
+                "English", "英语", "en" -> "English"
+                "Japanese", "日本語", "日语", "ja" -> "Japanese"
+                "Korean", "한국어", "韩语", "ko" -> "Korean"
+                "Spanish", "Español", "西班牙语", "es" -> "Spanish"
+                "French", "Français", "法语", "fr" -> "French"
+                "German", "Deutsch", "德语", "de" -> "German"
+                else -> lang.trim()
+            }
+        }
+
+        fun buildConnectionUrl(
+            baseUrl: String,
+            sourceLang: String,
+            targetLang: String,
+            vadSilenceMs: Int
+        ): String {
+            val cleanUrl = baseUrl.trim()
+            if (cleanUrl.isEmpty()) return ""
+
+            val normalizedSource = normalizeSourceLanguage(sourceLang)
+            val normalizedTarget = normalizeTargetLanguage(targetLang)
+
+            return try {
+                val uri = android.net.Uri.parse(cleanUrl)
+                val builder = uri.buildUpon()
+
+                // Preserve existing unrelated query parameters
+                val queryNames = uri.queryParameterNames
+                if (queryNames.isNotEmpty()) {
+                    builder.clearQuery()
+                    for (name in queryNames) {
+                        if (name !in listOf("source", "target", "silenceMs", "source_lang", "target_lang", "targetLang")) {
+                            for (value in uri.getQueryParameters(name)) {
+                                builder.appendQueryParameter(name, value)
+                            }
+                        }
+                    }
+                }
+
+                builder.appendQueryParameter("source", normalizedSource)
+                builder.appendQueryParameter("target", normalizedTarget)
+                builder.appendQueryParameter("silenceMs", vadSilenceMs.toString())
+                builder.build().toString()
+            } catch (e: Exception) {
+                val encodedSource = java.net.URLEncoder.encode(normalizedSource, "UTF-8")
+                val encodedTarget = java.net.URLEncoder.encode(normalizedTarget, "UTF-8")
+                val sep = if (cleanUrl.contains("?")) "&" else "?"
+                "$cleanUrl${sep}source=$encodedSource&target=$encodedTarget&silenceMs=$vadSilenceMs"
+            }
         }
     }
 
