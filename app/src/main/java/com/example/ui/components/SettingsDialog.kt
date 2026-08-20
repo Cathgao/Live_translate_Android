@@ -48,25 +48,20 @@ import com.example.model.AudioDeviceItem
 @Composable
 fun SettingsDialog(
     serverUrl: String,
-    sourceLanguage: String,
     vadSilenceMs: Int,
     fontSize: Int,
     keepScreenOn: Boolean,
     availableDevices: List<AudioDeviceItem>,
     selectedDevice: AudioDeviceItem?,
-    onSave: (url: String, sourceLang: String, vad: Int, font: Int, screen: Boolean, deviceId: Int?) -> Unit,
+    onSave: (url: String, vad: Int, font: Int, screen: Boolean, deviceId: Int?) -> Unit,
     onResetTokens: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var urlText by remember { mutableStateOf(serverUrl) }
-    var sourceLangText by remember { mutableStateOf(sourceLanguage) }
     var vadValue by remember { mutableStateOf(vadSilenceMs.toFloat()) }
     var fontValue by remember { mutableStateOf(fontSize.toFloat()) }
     var keepScreen by remember { mutableStateOf(keepScreenOn) }
     var selectedDeviceId by remember { mutableStateOf(selectedDevice?.id) }
-    var showSourceLangDropdown by remember { mutableStateOf(false) }
-
-    val languages = listOf("Auto", "Chinese (Simplified)", "English", "Spanish", "French", "Japanese", "Korean", "German")
 
     val vadLabel = when {
         vadValue <= 700f -> "极灵敏"
@@ -133,59 +128,6 @@ fun SettingsDialog(
                     }
                     Text(
                         text = "服务端识别静音多久后判定一句话结束。在下次新建连接时生效。",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-
-                // Source Language
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(text = "源语言", fontWeight = FontWeight.Bold)
-                        Text(
-                            text = "默认 Auto(自动检测)",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    ExposedDropdownMenuBox(
-                        expanded = showSourceLangDropdown,
-                        onExpandedChange = { showSourceLangDropdown = !showSourceLangDropdown }
-                    ) {
-                        @Suppress("DEPRECATION")
-                        OutlinedTextField(
-                            value = if (sourceLangText == "Auto") "Auto (自动检测)" else sourceLangText,
-                            onValueChange = {},
-                            readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showSourceLangDropdown) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        ExposedDropdownMenu(
-                            expanded = showSourceLangDropdown,
-                            onDismissRequest = { showSourceLangDropdown = false }
-                        ) {
-                            languages.forEach { lang ->
-                                DropdownMenuItem(
-                                    text = { Text(if (lang == "Auto") "Auto (自动检测)" else lang) },
-                                    onClick = {
-                                        sourceLangText = lang
-                                        showSourceLangDropdown = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        text = "指定说话语言或交给模型自动判断。在下次新建连接时生效。",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.outline,
                         modifier = Modifier.padding(top = 4.dp)
@@ -309,7 +251,6 @@ fun SettingsDialog(
                             vadValue = 1000f
                             fontValue = 25f
                             keepScreen = true
-                            sourceLangText = "Auto"
                         }
                     ) {
                         Text("恢复默认")
@@ -333,7 +274,7 @@ fun SettingsDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onSave(urlText, sourceLangText, vadValue.toInt(), fontValue.toInt(), keepScreen, selectedDeviceId)
+                    onSave(urlText, vadValue.toInt(), fontValue.toInt(), keepScreen, selectedDeviceId)
                     onDismiss()
                 }
             ) {

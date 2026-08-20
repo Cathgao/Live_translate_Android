@@ -27,7 +27,6 @@ data class TranslationItem(
     val timestamp: Long = System.currentTimeMillis(),
     val originalText: String,
     val translatedText: String,
-    val sourceLang: String = "Auto",
     val targetLang: String = "中文",
     val isFinal: Boolean = true
 )

@@ -27,7 +27,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val PREFS_NAME = "live_translate_settings"
         private const val KEY_SERVER_URL = "server_url"
-        private const val KEY_SOURCE_LANG = "source_lang"
         private const val KEY_TARGET_LANG = "target_lang"
         private const val KEY_VAD_SILENCE_MS = "vad_silence_ms"
         private const val KEY_FONT_SIZE = "font_size"
@@ -92,9 +91,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateProtocolMode(mode: ProtocolMode) {
         _protocolMode.value = mode
     }
-
-    private val _sourceLanguage = MutableStateFlow("Auto")
-    val sourceLanguage: StateFlow<String> = _sourceLanguage.asStateFlow()
 
     private val _targetLanguage = MutableStateFlow("Chinese (Simplified)")
     val targetLanguage: StateFlow<String> = _targetLanguage.asStateFlow()
@@ -166,7 +162,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val prefs = getApplication<Application>()
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         _serverUrl.value = prefs.getString(KEY_SERVER_URL, "") ?: ""
-        _sourceLanguage.value = prefs.getString(KEY_SOURCE_LANG, _sourceLanguage.value) ?: _sourceLanguage.value
         _targetLanguage.value = prefs.getString(KEY_TARGET_LANG, _targetLanguage.value) ?: _targetLanguage.value
         prefs.getInt(KEY_VAD_SILENCE_MS, _vadSilenceMs.value).also {
             if (it in 500..3000) _vadSilenceMs.value = it
@@ -205,7 +200,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
         prefs.putString(KEY_SERVER_URL, _serverUrl.value)
-        prefs.putString(KEY_SOURCE_LANG, _sourceLanguage.value)
         prefs.putString(KEY_TARGET_LANG, _targetLanguage.value)
         prefs.putInt(KEY_VAD_SILENCE_MS, _vadSilenceMs.value)
         prefs.putInt(KEY_FONT_SIZE, _fontSize.value)
@@ -222,21 +216,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persist()
     }
 
-    fun updateSourceLanguage(lang: String) {
-        if (_sourceLanguage.value == lang) return
-        _sourceLanguage.value = lang
-        persist()
-        if (connectionState.value == ConnectionState.CONNECTED || connectionState.value == ConnectionState.CONNECTING) {
-            webSocket.connect(
-                url = _serverUrl.value,
-                protocolMode = _protocolMode.value,
-                sourceLang = _sourceLanguage.value,
-                targetLang = _targetLanguage.value,
-                vadSilenceMs = _vadSilenceMs.value
-            )
-        }
-    }
-
     fun updateTargetLanguage(lang: String) {
         if (_targetLanguage.value == lang) return
         _targetLanguage.value = lang
@@ -245,7 +224,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             webSocket.connect(
                 url = _serverUrl.value,
                 protocolMode = _protocolMode.value,
-                sourceLang = _sourceLanguage.value,
                 targetLang = _targetLanguage.value,
                 vadSilenceMs = _vadSilenceMs.value
             )
@@ -260,7 +238,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             webSocket.connect(
                 url = _serverUrl.value,
                 protocolMode = _protocolMode.value,
-                sourceLang = _sourceLanguage.value,
                 targetLang = _targetLanguage.value,
                 vadSilenceMs = _vadSilenceMs.value
             )
@@ -290,7 +267,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             webSocket.connect(
                 url = _serverUrl.value,
                 protocolMode = _protocolMode.value,
-                sourceLang = _sourceLanguage.value,
                 targetLang = _targetLanguage.value,
                 vadSilenceMs = _vadSilenceMs.value
             )
@@ -306,7 +282,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _vadSilenceMs.value = 1000
         _fontSize.value = 25
         _keepScreenOn.value = true
-        _sourceLanguage.value = "Auto"
         persist()
     }
 
@@ -324,7 +299,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             webSocket.connect(
                 url = _serverUrl.value,
                 protocolMode = _protocolMode.value,
-                sourceLang = _sourceLanguage.value,
                 targetLang = _targetLanguage.value,
                 vadSilenceMs = _vadSilenceMs.value
             )
@@ -345,7 +319,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             webSocket.connect(
                 url = _serverUrl.value,
                 protocolMode = _protocolMode.value,
-                sourceLang = _sourceLanguage.value,
                 targetLang = _targetLanguage.value,
                 vadSilenceMs = _vadSilenceMs.value
             )

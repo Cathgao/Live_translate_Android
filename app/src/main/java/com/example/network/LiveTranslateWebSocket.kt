@@ -62,7 +62,6 @@ class LiveTranslateWebSocket(
     fun connect(
         url: String,
         protocolMode: ProtocolMode,
-        sourceLang: String = "Auto",
         targetLang: String = "Chinese (Simplified)",
         vadSilenceMs: Int = 1000
     ) {
@@ -75,9 +74,8 @@ class LiveTranslateWebSocket(
         sentChunksCount = 0
         pendingChunks.clear()
 
-        val normalizedSource = normalizeSourceLanguage(sourceLang)
         val normalizedTarget = normalizeTargetLanguage(targetLang)
-        val finalUrl = buildConnectionUrl(url, normalizedSource, normalizedTarget, vadSilenceMs)
+        val finalUrl = buildConnectionUrl(url, normalizedTarget, vadSilenceMs)
 
         addLog(LogType.SYSTEM, "Network", "Initiating WebSocket connection to $finalUrl (Mode: ${protocolMode.displayName}, Target: $normalizedTarget)")
         _connectionState.value = ConnectionState.CONNECTING
@@ -117,31 +115,14 @@ class LiveTranslateWebSocket(
             }
         }
 
-        fun normalizeSourceLanguage(lang: String): String {
-            return when (lang.trim()) {
-                "Auto", "auto", "自动", "自动检测" -> "Auto"
-                "Chinese (Simplified)", "中文", "简体中文", "zh", "zh-CN" -> "Chinese (Simplified)"
-                "Chinese (Traditional)", "繁体中文", "zh-TW" -> "Chinese (Traditional)"
-                "English", "英语", "en" -> "English"
-                "Japanese", "日本語", "日语", "ja" -> "Japanese"
-                "Korean", "한국어", "韩语", "ko" -> "Korean"
-                "Spanish", "Español", "西班牙语", "es" -> "Spanish"
-                "French", "Français", "法语", "fr" -> "French"
-                "German", "Deutsch", "德语", "de" -> "German"
-                else -> lang.trim()
-            }
-        }
-
         fun buildConnectionUrl(
             baseUrl: String,
-            sourceLang: String,
             targetLang: String,
             vadSilenceMs: Int
         ): String {
             val cleanUrl = baseUrl.trim()
             if (cleanUrl.isEmpty()) return ""
 
-            val normalizedSource = normalizeSourceLanguage(sourceLang)
             val normalizedTarget = normalizeTargetLanguage(targetLang)
 
             return try {
@@ -161,15 +142,13 @@ class LiveTranslateWebSocket(
                     }
                 }
 
-                builder.appendQueryParameter("source", normalizedSource)
                 builder.appendQueryParameter("target", normalizedTarget)
                 builder.appendQueryParameter("silenceMs", vadSilenceMs.toString())
                 builder.build().toString()
             } catch (e: Exception) {
-                val encodedSource = java.net.URLEncoder.encode(normalizedSource, "UTF-8")
                 val encodedTarget = java.net.URLEncoder.encode(normalizedTarget, "UTF-8")
                 val sep = if (cleanUrl.contains("?")) "&" else "?"
-                "$cleanUrl${sep}source=$encodedSource&target=$encodedTarget&silenceMs=$vadSilenceMs"
+                "$cleanUrl${sep}target=$encodedTarget&silenceMs=$vadSilenceMs"
             }
         }
     }

@@ -106,7 +106,6 @@ fun LiveTranslateScreen(
     val selectedDevice by viewModel.selectedDevice.collectAsState()
 
     val serverUrl by viewModel.serverUrl.collectAsState()
-    val sourceLanguage by viewModel.sourceLanguage.collectAsState()
     val targetLanguage by viewModel.targetLanguage.collectAsState()
     val vadSilenceMs by viewModel.vadSilenceMs.collectAsState()
     val fontSize by viewModel.fontSize.collectAsState()
@@ -831,15 +830,13 @@ fun LiveTranslateScreen(
     if (showSettingsDialog) {
         SettingsDialog(
             serverUrl = serverUrl,
-            sourceLanguage = sourceLanguage,
             vadSilenceMs = vadSilenceMs,
             fontSize = fontSize,
             keepScreenOn = keepScreenOn,
             availableDevices = availableDevices,
             selectedDevice = selectedDevice,
-            onSave = { newUrl, newSourceLang, vad, font, keepScreen, deviceId ->
+            onSave = { newUrl, vad, font, keepScreen, deviceId ->
                 viewModel.updateServerUrl(newUrl)
-                viewModel.updateSourceLanguage(newSourceLang)
                 viewModel.updateVadSilenceMs(vad)
                 viewModel.updateFontSize(font)
                 viewModel.updateKeepScreenOn(keepScreen)
