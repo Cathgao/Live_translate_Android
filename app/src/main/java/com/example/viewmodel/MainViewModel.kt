@@ -150,6 +150,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var serialCommittedTrans: String = ""
     private var lastSentOrig: String = ""
     private var lastSentTrans: String = ""
+    private var needClearScreenOnNextSpeech: Boolean = false
 
     init {
         // Initialize LED state (Mic OFF: PI15=0, PI12=1)
@@ -332,6 +333,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         serialCommittedTrans = ""
         lastSentOrig = ""
         lastSentTrans = ""
+        needClearScreenOnNextSpeech = false
         segmentCommitJob?.cancel()
         segmentCommitJob = null
 
@@ -404,6 +406,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val hasMeaningfulDelta = origDelta.trim().isNotEmpty() || transDelta.trim().isNotEmpty()
             if (hasMeaningfulDelta) {
+                // If previous paragraph ended on silence timeout, clear screen now before writing new speech
+                if (needClearScreenOnNextSpeech) {
+                    needClearScreenOnNextSpeech = false
+                    serialCommittedOrig = ""
+                    serialCommittedTrans = ""
+                    lastSentOrig = ""
+                    lastSentTrans = ""
+                    serialPortManager.clearAllTextBoxes()
+                }
+
                 _originalLive.value = pendingOrig
                 _translatedLive.value = pendingTrans
                 if (isRecording.value) {
@@ -438,6 +450,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     pendingTrans = ""
                     lastSentOrig = ""
                     lastSentTrans = ""
+                    needClearScreenOnNextSpeech = false
                     _originalLive.value = ""
                     _translatedLive.value = ""
 
@@ -502,17 +515,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             serialCommittedTrans = ""
             lastSentOrig = ""
             lastSentTrans = ""
+            needClearScreenOnNextSpeech = false
             serialPortManager.clearAllTextBoxes()
         } else if (reason == "silenceTimer") {
-            if (isRecording.value) {
-                // Paragraph finished via silence timeout while recording is active:
-                // clear serial paragraph buffer so next speech starts fresh
-                serialCommittedOrig = ""
-                serialCommittedTrans = ""
-                lastSentOrig = ""
-                lastSentTrans = ""
-                serialPortManager.clearAllTextBoxes()
-            }
+            // Paragraph finished via silence timeout (5s no speech):
+            // Commit text to history, reset paragraph accumulation,
+            // but DO NOT clear the screen yet! Retain screen text until next speech arrives.
+            serialCommittedOrig = ""
+            serialCommittedTrans = ""
+            lastSentOrig = ""
+            lastSentTrans = ""
+            needClearScreenOnNextSpeech = true
         } else {
             // Sentence finished via VAD / isFinished / transcription_finished / stopRecording:
             val candidateOrig = if (finalOrig.isNotEmpty()) joinParagraphText(serialCommittedOrig, finalOrig) else serialCommittedOrig
@@ -530,6 +543,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 serialCommittedTrans = finalTrans
                 lastSentOrig = ""
                 lastSentTrans = ""
+                needClearScreenOnNextSpeech = false
             } else {
                 serialCommittedOrig = candidateOrig
                 serialCommittedTrans = candidateTrans
@@ -560,6 +574,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         serialCommittedTrans = ""
         lastSentOrig = ""
         lastSentTrans = ""
+        needClearScreenOnNextSpeech = false
         segmentCommitJob?.cancel()
         segmentCommitJob = null
         serialPortManager.clearAllTextBoxes()
